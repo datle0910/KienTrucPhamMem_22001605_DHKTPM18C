@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+
+  product-db:
+    image: postgres
+    environment:
+      POSTGRES_DB: product_db
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+
+  customer-db:
+    image: postgres
+    environment:
+      POSTGRES_DB: customer_db
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+
+  order-db:
+    image: postgres
+    environment:
+      POSTGRES_DB: order_db
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+
+  product-service:
+    build: ./product-service
+    ports:
+      - "8081:8081"
+
+  customer-service:
+    build: ./customer-service
+    ports:
+      - "8082:8082"
+
+  order-service:
+    build: ./order-service
+    ports:
+      - "8083:8083"
