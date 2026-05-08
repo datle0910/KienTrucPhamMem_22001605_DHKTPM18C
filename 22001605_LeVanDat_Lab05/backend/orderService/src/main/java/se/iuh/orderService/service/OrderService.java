@@ -1,11 +1,18 @@
 package se.iuh.orderService.service;
 
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.ratelimiter.RateLimiter;
+import io.github.resilience4j.retry.Retry;
+import io.github.resilience4j.timelimiter.TimeLimiter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 import se.iuh.orderService.model.Order;
 
 import java.util.ArrayList;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.function.Supplier;
 import java.util.List;
 import java.util.Map;
 
@@ -14,6 +21,11 @@ import java.util.Map;
 public class OrderService {
 
     private final RestTemplate restTemplate;
+    private final CircuitBreaker externalClientCircuitBreaker;
+    private final Retry externalClientRetry;
+    private final RateLimiter externalClientRateLimiter;
+    private final TimeLimiter externalClientTimeLimiter;
+    private final ScheduledExecutorService externalClientExecutor;
 
     private final List<Order> orders = new ArrayList<>();
     private Long idCounter = 1L;
@@ -24,7 +36,7 @@ public class OrderService {
         // 1. validate user
         String userUrl = "http://172.16.51.206:8081/users/" + userId;
         try {
-            restTemplate.getForObject(userUrl, Object.class);
+            executeExternalCall(() -> restTemplate.getForObject(userUrl, Object.class), "User not found");
         } catch (Exception e) {
             throw new RuntimeException("User not found");
         }
@@ -37,7 +49,10 @@ public class OrderService {
 
             Map<String, Object> food;
             try {
-                food = restTemplate.getForObject(foodUrl, Map.class);
+                food = executeExternalCall(
+                        () -> restTemplate.getForObject(foodUrl, Map.class),
+                        "Food not found: " + foodId
+                );
             } catch (Exception e) {
                 throw new RuntimeException("Food not found: " + foodId);
             }
@@ -75,5 +90,21 @@ public class OrderService {
     public void markPaid(Long id) {
         Order order = getById(id);
         order.setStatus("PAID");
+    }
+
+    private <T> T executeExternalCall(Supplier<T> supplier, String errorMessage) {
+        Supplier<T> withTimeLimiter = () -> externalClientTimeLimiter.executeFutureSupplier(
+                () -> CompletableFuture.supplyAsync(supplier, externalClientExecutor)
+        );
+
+        Supplier<T> withRetry = Retry.decorateSupplier(externalClientRetry, withTimeLimiter);
+        Supplier<T> withCircuitBreaker = CircuitBreaker.decorateSupplier(externalClientCircuitBreaker, withRetry);
+        Supplier<T> withRateLimiter = RateLimiter.decorateSupplier(externalClientRateLimiter, withCircuitBreaker);
+
+        try {
+            return withRateLimiter.get();
+        } catch (Exception e) {
+            throw new RuntimeException(errorMessage, e);
+        }
     }
 }
